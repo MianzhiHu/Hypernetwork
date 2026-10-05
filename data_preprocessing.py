@@ -413,8 +413,9 @@ print(f'Stop-signal data contains NaN: {stop_signal_data.isnull().values.any()}'
 # Two-by-two task (N = 106)
 # ======================================================================================================================
 two_by_two_data = []
-two_by_two_col = ['CTI', 'correct', 'cue', 'stim_color', 'stim_number',
-                  'switch_type', 'task_type', 'responded', 'worker_id']
+two_by_two_col = ['block_duration', 'CTI', 'correct', 'cue', 'stim_color', 'stim_number',
+                  'switch_type', 'task_type', 'responded', 'worker_id',
+                  'response_congruent', 'first_trial_of_block']
 
 for sub_dir in os.listdir(data_dir):
     if not sub_dir.startswith("sub-"):
@@ -432,6 +433,44 @@ for sub_dir in os.listdir(data_dir):
             if file.endswith(".tsv") and "twoByTwo" in file:
                 file_path = os.path.join(two_by_two_dir, file)
                 df = pd.read_csv(file_path, sep='\t')
+
+                # Match timing records to original trials, retaining the BIDS order and cohort.
+                duration_df = pd.read_csv(f'./Data/data_with_duration/{sub_dir[4:]}_twoByTwo_cleaned.csv')
+                duration_df = duration_df.loc[duration_df.exp_stage.eq('test') & duration_df.trial_id.eq('stim')].copy()
+                duration_df['onset'] = (duration_df.time_elapsed - duration_df.block_duration) / 1000
+                duration_df['response_time'] = duration_df.rt.replace(-1, np.nan) / 1000
+                duration_df['CTI'] = duration_df.CTI / 1000
+                duration_df['block_duration'] = duration_df.block_duration / 1000
+                match_columns = ['worker_id', 'onset', 'key_press', 'correct_response',
+                                 'response_time', 'CTI', 'stim_number']
+                match_keys = df[match_columns].copy()
+                for column in ['onset', 'response_time', 'CTI']:
+                    match_keys[column] = match_keys[column].round(6)
+                    duration_df[column] = duration_df[column].round(6)
+                matched = match_keys.merge(duration_df[match_columns + ['block_duration']],
+                                           on=match_columns, how='left', sort=False,
+                                           validate='one_to_one', indicator=True)
+                if not matched['_merge'].eq('both').all():
+                    raise ValueError(f'Duration records do not match original trials: {file_path}')
+                if not (np.isfinite(matched.block_duration) & matched.block_duration.gt(0)).all():
+                    raise ValueError(f'Invalid block duration: {file_path}')
+                df['block_duration'] = matched.block_duration.to_numpy()
+
+                # Congruency is based on instructed keys, never the participant's actual choice.
+                # The colour and magnitude mappings were randomized separately for each participant.
+                magnitude_trials = df.loc[df.task_type.eq('magnitude')].copy()
+                magnitude_trials['high'] = magnitude_trials.stim_number.gt(5)
+                color_trials = df.loc[df.task_type.eq('color')]
+                if (magnitude_trials.groupby('high').correct_response.nunique().ne(1).any()
+                        or color_trials.groupby('stim_color').correct_response.nunique().ne(1).any()):
+                    raise ValueError(f'Inconsistent two-by-two response mapping: {file_path}')
+                magnitude_keys = magnitude_trials.groupby('high').correct_response.first()
+                color_keys = color_trials.groupby('stim_color').correct_response.first()
+                magnitude_response = df.stim_number.gt(5).map(magnitude_keys)
+                color_response = df.stim_color.map(color_keys)
+                if magnitude_response.isna().any() or color_response.isna().any():
+                    raise ValueError(f'Incomplete two-by-two response mapping: {file_path}')
+                df['response_congruent'] = magnitude_response.eq(color_response).astype(int)
 
                 rt_indicates_response = df['response_time'].notna()
                 key_indicates_response = df['key_press'].ne(-1)
@@ -556,6 +595,7 @@ common_participants_4task = (
     & set(cct_data['worker_id'])
     & set(motor_data['worker_id'])
     & set(stop_signal_data['worker_id'])
+    & set(two_by_two_data['worker_id'])
     & set(survey_data['worker_id'])
 )
 

@@ -47,15 +47,55 @@ kept_variance = 0.99
 n_splits = 10
 n_participant_folds = 5
 participant_split_seed = 42
-# task_names = ['ant', 'cct', 'dd', 'motor', 'stroop', 'dpx', 'stopsignal', 'twobytwo']
-task_names = ['cct', 'dd', 'motor', 'stopsignal']
-prevalance = [0.2066, 0.4950, 0.8476, 0.7716]
+task_names = ['cct', 'dd', 'motor', 'stopsignal', 'twobytwo']
+prevalance = [0.2066, 0.4950, 0.8476, 0.7716, 0.9145]
 # Fixed task mapping keeps rates correct when task_names selects a subset.
 prevalence_by_task = dict(zip(task_names, prevalance, strict=True))
 trial_keys = ['worker_id', 'participant_id', 'trial']
 figure_size = (7.2, 4.2)
 figure_dpi = 300
-selected_config = 'layers_1_dims_64_rank_full_emb_4_nonlinear_nodes_8_reg_0.0'
+selected_config = 'layers_1_dims_8_rank_full_emb_2_nonlinear_nodes_8_reg_0.0001'
+
+# Exclude a configuration if ANY listed hyperparameter value matches.
+# Empty lists exclude nothing. rank=None means full rank.
+exclude_hyperparameters = {
+    'num_hidden_layers': [],  # Example: [2]
+    'hidden_dim': [],        # Example: [8, 16]; common width of each layer
+    'participant_emb_dim': [],  # Example: [2]
+    'rank': [],              # Example: [2] or [None]
+    'mapping': [],           # Example: ['linear']
+    'hyper_hidden_dim': [],  # Example: [4]; None for linear mapping
+    'hyper_reg': [],         # Example: [0.0001, 0.001, 0.01]
+}
+
+# Select configurations once, so all later analyses use the same exclusions.
+configuration_rows = []
+for folder in sorted(root.glob('layers_*')):
+    if not folder.is_dir():
+        continue
+    parts = folder.name.split('_')
+    configuration_rows.append({
+        'config_id': folder.name,
+        'num_hidden_layers': int(parts[1]),
+        'hidden_dim': int(parts[3].split('x')[0]),
+        'participant_emb_dim': int(parts[7]),
+        'rank': None if parts[5] == 'full' else int(parts[5]),
+        'mapping': parts[8],
+        'hyper_hidden_dim': None if parts[10] == 'na' else int(parts[10]),
+        'hyper_reg': float(parts[12]) if len(parts) > 12 else 0.0,
+    })
+configuration_table = pd.DataFrame(configuration_rows, dtype=object)
+if configuration_table.empty:
+    raise ValueError(f'No configuration folders in {root}')
+keep_configuration = pd.Series(True, index=configuration_table.index)
+for parameter, values in exclude_hyperparameters.items():
+    if parameter not in configuration_table.columns or parameter == 'config_id':
+        raise ValueError(f'Unknown exclusion hyperparameter: {parameter}')
+    keep_configuration &= ~configuration_table[parameter].isin(values)
+included_config_ids = set(configuration_table.loc[keep_configuration, 'config_id'])
+if not included_config_ids:
+    raise ValueError('Hyperparameter exclusions removed every configuration')
+print(f'Configurations included: {len(included_config_ids)}; excluded: {(~keep_configuration).sum()}')
 plt.rcParams.update({'font.family': 'sans-serif', 'font.size': 10})
 
 stability_labels = {'first_component_r': 'Mean pairwise first-component r (GCCA)',
@@ -105,7 +145,9 @@ for name, task in tasks.items():
         loaders[name, split] = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=behavioral_collate_fn)
 
 # Load and evaluate each saved checkpoint, validating its configuration and computing test test_metrics.
-paths = sorted(path for path in root.glob("*/random_split_*/*_model.pt") if path.name.removesuffix('_model.pt') in task_names)
+paths = sorted(path for path in root.glob("*/random_split_*/*_model.pt")
+               if path.name.removesuffix('_model.pt') in task_names
+               and path.parent.parent.name in included_config_ids)
 if not paths:
     raise FileNotFoundError(f"No saved checkpoints in {root}")
 
@@ -188,8 +230,6 @@ test_nll=("test_nll", "mean"), test_accuracy=("test_accuracy", "mean"), pred_imb
 print("Selected configuration test performance:")
 print(test_selected)
 
-
-
 # Track test NLL along each hyperparameter dimension, for each task and overall. This is a simple univariate analysis.
 test_by_task["rank"] = test_by_task["rank"].apply(lambda x: f"LORA-{int(x)}" if pd.notnull(x) else "full-rank")
 test_parameters = ['num_hidden_layers', 'hidden_dims', 'rank', 'participant_emb_dim', 'mapping', 'hyper_hidden_dim', 'hyper_reg']
@@ -233,7 +273,7 @@ stability_groups = {}
 for path in sorted(root.glob("*/random_split_*/*_embeddings.npy")):
     name = path.name.removesuffix("_embeddings.npy")
     split = int(path.parent.name.removeprefix("random_split_"))
-    if name not in task_names:
+    if name not in task_names or path.parent.parent.name not in included_config_ids:
         continue
     if split not in range(n_splits):
         raise ValueError(f"Unexpected split: {path}")
@@ -386,6 +426,13 @@ stability_by_config.to_csv(stability_dir / 'stability_by_config.csv', index=Fals
 stability_by_config_sorted = stability_by_config.sort_values(['linear_cka', 'config_id'], ascending=[False, True]).reset_index(drop=True)
 print(stability_by_config_sorted.head(20).to_string(index=False), flush=True)
 
+# Print the selected configuration's stability performance for each task and overall.
+print(f'Selected configuration: {selected_config}', flush=True)
+print('Stability performance by task:', flush=True)
+stability_selected = stability_results_all.loc[stability_results_all.config_id.eq(selected_config)].groupby('task', as_index=False)[stability_metrics].mean()
+print(stability_selected.to_string(index=False), flush=True)
+
+
 for task in task_names + ['all_tasks']:
     stability_plot_data = stability_by_config if task == 'all_tasks' else stability_results_all.loc[stability_results_all.task.eq(task)]
     for metric, ylabel in stability_labels.items():
@@ -410,9 +457,10 @@ print(f'Embedding stability saved to {stability_dir}', flush=True)
 # Cross-task convergence (pairwise CCA/CKA and joint eight-task GCCA)
 # ======================================================================================================================
 # All within-task GCCA components are inputs; cross-task CCA fits only one latent component.
-cross_task_config_ids = sorted({path.stem.rsplit('_', 1)[0] for path in aligned_dir.glob('*.npz')})
+cross_task_config_ids = sorted({path.stem.rsplit('_', 1)[0] for path in aligned_dir.glob('*.npz')}
+                               & included_config_ids)
 identities = pd.read_csv(stability_dir / 'participant_map.csv').sort_values('participant_id').reset_index(drop=True)
-diff = set(cross_task_config_ids) - set(same_pred_config.config_id.unique())
+# diff = set(cross_task_config_ids) - set(same_pred_config.config_id.unique())
 cross_task_results = []
 for config_id in cross_task_config_ids:
     embedding_dim = int(config_id.split('_')[7])

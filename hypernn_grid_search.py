@@ -16,10 +16,11 @@ cct_data = pd.read_csv('./Data/hypernetwork_data/cct_data.csv')
 dd_data = pd.read_csv('./Data/hypernetwork_data/dd_data.csv')
 motor_data = pd.read_csv('./Data/hypernetwork_data/motor_data.csv')
 stopsignal_data = pd.read_csv('./Data/hypernetwork_data/stop_signal_data.csv')
+twobytwo_data = pd.read_csv('./Data/hypernetwork_data/two_by_two_data.csv')
 # ant_data = pd.read_csv('./Data/hypernetwork_data/ant_data.csv')
 # stroop_data = pd.read_csv('./Data/hypernetwork_data/stroop_data.csv')
 # dpx_data = pd.read_csv('./Data/hypernetwork_data/dpx_data.csv')
-twobytwo_data = pd.read_csv('./Data/hypernetwork_data/two_by_two_data.csv')
+
 
 dis = (twobytwo_data.groupby('worker_id')['correct'].mean().reset_index().rename(columns={'correct': 'discrimination'})
        .sort_values('discrimination', ascending=False).reset_index(drop=True))
@@ -34,10 +35,10 @@ cct_data, cct_x_col, cct_y_col = preprocess_task(cct_data, TASK_CONFIGS["CCT"], 
 dd_data, dd_x_col, dd_y_col = preprocess_task(dd_data, TASK_CONFIGS["DD"], task_name='DD')
 motor_data, motor_x_col, motor_y_col = preprocess_task(motor_data, TASK_CONFIGS["Motor"], task_name='Motor')
 stopsignal_data, stopsignal_x_col, stopsignal_y_col = preprocess_task(stopsignal_data, TASK_CONFIGS["StopSignal"], task_name='StopSignal')
+twobytwo_data, twobytwo_x_col, twobytwo_y_col = preprocess_task(twobytwo_data, TASK_CONFIGS["TwoByTwo"], task_name='TwoByTwo')
 # ant_data, ant_x_col, ant_y_col = preprocess_task(ant_data, TASK_CONFIGS["ANT"], task_name='ANT')
 # stroop_data, stroop_x_col, stroop_y_col = preprocess_task(stroop_data, TASK_CONFIGS["Stroop"], task_name='Stroop')
 # dpx_data, dpx_x_col, dpx_y_col = preprocess_task(dpx_data, TASK_CONFIGS["Dpx"], task_name='Dpx')
-# twobytwo_data, twobytwo_x_col, twobytwo_y_col = preprocess_task(twobytwo_data, TASK_CONFIGS["TwoByTwo"], task_name='TwoByTwo')
 
 # Each preprocessing pipeline provides the same pieces needed by the shared training loop.
 # tasks = [
@@ -55,7 +56,8 @@ tasks = [
     {"name": "cct", "data": cct_data, "x_col": cct_x_col, "y_col": cct_y_col},
     {"name": "dd", "data": dd_data, "x_col": dd_x_col, "y_col": dd_y_col},
     {"name": "motor", "data": motor_data, "x_col": motor_x_col, "y_col": motor_y_col},
-    {"name": "stopsignal", "data": stopsignal_data, "x_col": stopsignal_x_col, "y_col": stopsignal_y_col}
+    {"name": "stopsignal", "data": stopsignal_data, "x_col": stopsignal_x_col, "y_col": stopsignal_y_col},
+    {"name": "twobytwo", "data": twobytwo_data, "x_col": twobytwo_x_col, "y_col": twobytwo_y_col},
 ]
 
 
@@ -70,6 +72,7 @@ if __name__ == "__main__":
     num_hidden_layers = [1]
     num_embedding_dim = [2, 4, 8, 16]
     num_hyper_hidden_dim = [4, 8, 16, 32]
+    # hyper_reg_values = [0.0]
     hyper_reg_values = [0.0, 1e-4, 1e-3, 1e-2]
 
     # # Regularization search
@@ -127,7 +130,16 @@ if __name__ == "__main__":
         task_map = (task["data"][["participant_id", "worker_id"]].drop_duplicates().sort_values("participant_id").reset_index(drop=True))
         if not participant_map.equals(task_map):
             raise ValueError(f"Participant indexing differs for task {task['name']}.")
-    participant_map.to_csv(os.path.join(save_dir, "participant_map.csv"), index=False)
+    participant_map_path = os.path.join(save_dir, "participant_map.csv")
+    if os.path.exists(participant_map_path):
+        # Category codes may be int8, while CSV reloads them as int64.
+        # Compare the actual assignments without requiring the same storage dtype.
+        try:
+            pd.testing.assert_frame_equal(participant_map, pd.read_csv(participant_map_path), check_dtype=False)
+        except AssertionError as error:
+            raise ValueError("Existing participant map differs; refusing to overwrite it.") from error
+    else:
+        participant_map.to_csv(participant_map_path, index=False)
 
     # Save the exact trial assignments once so other models can reuse them.
     random_split_dir = os.path.join(save_dir, "random_splits")
@@ -230,7 +242,9 @@ if __name__ == "__main__":
     split_seed_manifest["split_assignment_path"] = split_seed_manifest["task"].map(split_assignment_paths)
     split_seed_manifest.to_csv(os.path.join(random_split_dir, "random_split_manifest.csv"), index=False)
 
-    manifest_rows = []
+    manifest_path = os.path.join(save_dir, "training_manifest.csv")
+    manifest_rows = (pd.read_csv(manifest_path).to_dict("records")
+                     if os.path.exists(manifest_path) else [])
     total_runs = split_folds * len(grid)
 
     for random_split in range(split_folds):
@@ -304,20 +318,35 @@ if __name__ == "__main__":
                     "shared_right": False,
                 }
 
+                result_paths = (checkpoint_path, embedding_path, history_path)
                 completed_files_exist = all(os.path.isfile(path) and os.path.getsize(path) > 0
-                                            for path in (checkpoint_path, embedding_path, history_path))
+                                            for path in result_paths)
                 checkpoint_matches = False
-                if completed_files_exist:
+                if any(os.path.exists(path) for path in result_paths):
+                    # Existing output is never permission to overwrite, even if incomplete.
+                    if not completed_files_exist:
+                        raise RuntimeError(f"Incomplete existing results: {checkpoint_path}. "
+                                           "Inspect them or use a new output folder; nothing was overwritten.")
                     try:
                         saved_checkpoint = torch.load(checkpoint_path, map_location="cpu")
-                        saved_config = saved_checkpoint.get("extra_config") or {}
-                        checkpoint_matches = (
-                            saved_checkpoint.get("model_state_dict") is not None
-                            and saved_checkpoint.get("best_epoch", 0) > 0
-                            and all(saved_config.get(key) == value for key, value in expected_checkpoint_config.items())
-                        )
                     except Exception as error:
-                        print(f"    existing checkpoint for {task['name']} could not be validated: {error}")
+                        raise RuntimeError(f"Cannot read existing checkpoint: {checkpoint_path}. "
+                                           "Refusing to overwrite it.") from error
+                    saved_config = saved_checkpoint.get("extra_config") or {}
+                    # Compare the results folder/task split location, not its machine-specific absolute prefix.
+                    # The actual saved split assignments are validated above.
+                    saved_split = str(saved_config.get("split_assignment_path", "")).replace("\\", "/")
+                    current_split = split_assignment_path.replace("\\", "/")
+                    mismatches = [key for key, value in expected_checkpoint_config.items()
+                                  if key != "split_assignment_path" and saved_config.get(key) != value]
+                    if saved_split.split("/")[-3:] != current_split.split("/")[-3:]:
+                        mismatches.append("split_assignment_path")
+                    if saved_checkpoint.get("model_state_dict") is None or saved_checkpoint.get("best_epoch", 0) <= 0:
+                        mismatches.append("completed_checkpoint")
+                    if mismatches:
+                        raise RuntimeError(f"Existing checkpoint differs in {mismatches}: {checkpoint_path}. "
+                                           "Refusing to overwrite it; use a different output folder for a new fit.")
+                    checkpoint_matches = True
 
                 manifest_row = {
                     "config_id": config_id,
@@ -346,7 +375,7 @@ if __name__ == "__main__":
                 manifest_rows.append(manifest_row)
 
                 if checkpoint_matches:
-                    pd.DataFrame(manifest_rows).to_csv(os.path.join(save_dir, "training_manifest.csv"), index=False)
+                    pd.DataFrame(manifest_rows).drop_duplicates(["config_id", "random_split", "task"], keep="last").to_csv(manifest_path, index=False)
                     print(f"    fold rotation {random_split}: skipped completed {task['name']}")
                     continue
 
@@ -397,7 +426,7 @@ if __name__ == "__main__":
 
                 np.save(embedding_path, model.participant_embedding.weight.detach().cpu().numpy())
                 pd.DataFrame(history).to_csv(history_path, index=False)
-                pd.DataFrame(manifest_rows).to_csv(os.path.join(save_dir, "training_manifest.csv"), index=False)
+                pd.DataFrame(manifest_rows).drop_duplicates(["config_id", "random_split", "task"], keep="last").to_csv(manifest_path, index=False)
                 print(f"    fold rotation {random_split}: saved {task['name']}")
 
     print(f"Training complete. Results saved to: {save_dir}")

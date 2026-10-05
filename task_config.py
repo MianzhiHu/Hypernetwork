@@ -49,10 +49,10 @@ TASK_CONFIGS = {
 
     'TwoByTwo': {
         'categorical_x': ['cue', 'stim_color', 'stim_number', 'switch_type', 'task_type'],
-        'continuous_x': ['CTI'],
+        'continuous_x': ['CTI', 'block_duration'],
         'y_col': 'correct',
         'y_transform': 'int',
-        'mask_col': 'true'
+        'mask_col': 'false'
     },
 
     'StopSignal': {

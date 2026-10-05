@@ -11,7 +11,7 @@ from threadpoolctl import threadpool_limits
 from HyperNetwork import evaluate_permutation
 
 # Settings: only the exported main model is evaluated here.
-selected_config = 'layers_1_dims_64_rank_full_emb_4_nonlinear_nodes_8_reg_0.0'
+selected_config = 'layers_1_dims_16_rank_full_emb_2_nonlinear_nodes_16_reg_0.0'
 root = Path('./Final_Models') / selected_config
 output = Path('./Results/Main_Model_Evaluation') / selected_config
 n_splits = 10
@@ -32,7 +32,7 @@ hyper_nn_results = BASE / 'Results/HyperNN_Grid_Search_Evaluation/test_results_a
 
 if __name__ == '__main__':
     cognitive_records = []
-    for task in ['cct', 'dd', 'stopsignal']:
+    for task in ['cct', 'dd', 'stopsignal', 'motor']:
         paths = sorted((cognitive_root / task).glob('*_eval_*.csv'))
         if not paths:
             raise FileNotFoundError(f'No saved evaluation files for {task}')
@@ -74,7 +74,7 @@ if __name__ == '__main__':
             print(f'{family}: no saved results at {path}; skipping comparison')
             continue
         neural = pd.read_csv(path)
-        neural = neural.loc[neural.task.isin(['cct', 'dd'])].copy()
+        neural = neural.loc[neural.task.isin(['cct', 'dd', 'stopsignal', 'motor'])].copy()
         if family == 'HyperNN':
             neural = neural.loc[neural.config_id.eq(selected_config)].copy()
         if neural.empty:
