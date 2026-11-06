@@ -847,20 +847,16 @@ def preprocess_task(df, config, participant_col="worker_id", task_name=None):
     return df, x_cols, y_col
 
 
-def evaluate_permutation(model_type, params, views, orders, cka_views=None):
+def evaluate_cka_permutation(views, orders):
     # One numerical-library thread per worker, including when n_jobs=1.
     with threadpool_limits(limits=1):
         shuffled = [v[order] for v, order in zip(views, orders)]
-        model = {'CCA': CCA, 'GCCA': GCCA}[model_type](**params).fit(shuffled)
-        mean_pairwise_r = model.score(shuffled)
-        cka = None
-        if cka_views is not None:
-            raw = [v[order] for v, order in zip(cka_views, orders)]
-            metric = CKA()
-            cka = np.array([metric.linear_CKA(raw[a], raw[b]) for a, b in combinations(range(len(raw)), 2)])
-        if not np.isfinite(mean_pairwise_r).all() or (cka is not None and not np.isfinite(cka).all()):
-            raise ValueError('Non-finite permutation statistic')
-        return mean_pairwise_r, cka
+        metric = CKA()
+        cka = np.array([metric.linear_CKA(shuffled[a], shuffled[b]) for a, b in combinations(range(len(shuffled)), 2)])
+        if not np.isfinite(cka).all():
+            raise ValueError('Non-finite CKA permutation statistic')
+        return cka
+
 
 # ======================================================================================================================
 # Unused

@@ -1,3 +1,7 @@
+# Selected configuration for the model
+selected_config = 'layers_1_dims_8_rank_full_emb_4_nonlinear_nodes_16_reg_0.0'
+
+# Define the task configurations
 TASK_CONFIGS = {
     'ANT': {
         'categorical_x': ['cue', 'flanker_location', 'flanker_middle_direction', 'flanker_type'],

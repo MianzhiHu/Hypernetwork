@@ -13,7 +13,7 @@ cog_output = BASE / 'Results/Final_Models/CogModels'
 nn_output = BASE / 'Results/Final_Models/BasicNN'
 num_iterations = 100
 max_workers = 32
-hidden_dim = 64
+hidden_dim = 8
 num_hidden_layers = 1
 batch_size = 16
 n_epochs = 400
@@ -28,9 +28,9 @@ if __name__ == '__main__':
     stop_signal_data = pd.read_csv(data_dir / 'stop_signal_data.csv')
     twobytwo_data = pd.read_csv(data_dir / 'two_by_two_data.csv')
 
-    # # ==================================================================================================================
-    # # Cognitive model training and evaluation
-    # # ==================================================================================================================
+    # ==================================================================================================================
+    # Cognitive model training and evaluation
+    # ==================================================================================================================
     # # DD
     # for split in range(10):
     #     # The last evaluation file is saved after all models for this fold.
@@ -129,148 +129,148 @@ if __name__ == '__main__':
     #     cct_pt_prob_eval.to_csv(run_dir / f'cct_pt_prob_eval_{split}.csv', index=False)
     #     cct_pt_loss_shape_eval.to_csv(run_dir / f'cct_pt_loss_shape_eval_{split}.csv', index=False)
 
-    # # Stop-Signal
-    # for split in range(10):
-    #     # The last evaluation file is saved after all models for this fold.
-    #     if (cog_output / 'stopsignal' / f'ss_rdex_eval_{split}.csv').is_file():
-    #         print(f"Skipping completed Stop-Signal split {split}")
-    #         continue
-    #     print(f"Training Stop-Signal model on split {split}")
-    #     ss_data = stop_signal_data.copy()
-    #     ss_data['trial'] = ss_data.groupby('worker_id').cumcount() + 1
-    #     ss_split = pd.read_csv(split_dir / f'stopsignal_random_splits.csv')
-    #     columns = ['worker_id', 'trial', 'fold'] + [f'random_split_{split}']
-    #     ss_data_fold = ss_data.merge(ss_split[columns], on=['worker_id', 'trial'], how='outer', validate='one_to_one', indicator=True)
-    #     if not ss_data_fold['_merge'].eq('both').all():
-    #         raise ValueError(f'Stop-Signal: trial identities do not match the saved folds')
-    #     ss_data_fold = ss_data_fold.drop(columns='_merge')
-    #     training_data = ss_data_fold[ss_data_fold['random_split_{}'.format(split)].isin(['train', 'validation'])]
-    #     training_dict = dict_generator_cognitive(training_data, task='stop_signal')
-    #     test_data = ss_data_fold[ss_data_fold['random_split_{}'.format(split)] == 'test']
-    #     test_dict = dict_generator_cognitive(test_data, task='stop_signal')
-    #
-    #     # Define the models
-    #     ss_model_logistic = StopSignal('ss_logistic')
-    #     ss_model_hr_exgau = StopSignal('ss_hr_exgau')
-    #     ss_model_rdex = StopSignal('ss_rdex')
-    #
-    #     # Fit the models
-    #     ss_logistic_results = ss_model_logistic.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
-    #     ss_hr_exgau_results = ss_model_hr_exgau.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
-    #     ss_rdex_results = ss_model_rdex.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
-    #
-    #     # Evaluate the models on the test set
-    #     ss_logistic_eval = ss_model_logistic.evaluate(ss_logistic_results.set_index('participant_id')['best_parameters'], test_dict)
-    #     ss_hr_exgau_eval = ss_model_hr_exgau.evaluate(ss_hr_exgau_results.set_index('participant_id')['best_parameters'], test_dict)
-    #     ss_rdex_eval = ss_model_rdex.evaluate(ss_rdex_results.set_index('participant_id')['best_parameters'], test_dict)
-    #
-    #     # Save the results
-    #     run_dir = cog_output / 'stopsignal'
-    #     run_dir.mkdir(parents=True, exist_ok=True)
-    #     ss_logistic_results.to_csv(run_dir / f'ss_logistic_fit_{split}.csv', index=False)
-    #     ss_hr_exgau_results.to_csv(run_dir / f'ss_hr_exgau_fit_{split}.csv', index=False)
-    #     ss_rdex_results.to_csv(run_dir / f'ss_rdex_fit_{split}.csv', index=False)
-    #     ss_logistic_eval.to_csv(run_dir / f'ss_logistic_eval_{split}.csv', index=False)
-    #     ss_hr_exgau_eval.to_csv(run_dir / f'ss_hr_exgau_eval_{split}.csv', index=False)
-    #     ss_rdex_eval.to_csv(run_dir / f'ss_rdex_eval_{split}.csv', index=False)
-    #
-    # # Motor Stop-Signal
-    # for split in range(10):
-    #     # The last evaluation file is saved after all models for this fold.
-    #     if (cog_output / 'motor' / f'motor_rdex_eval_{split}.csv').is_file():
-    #         print(f"Skipping completed Motor Stop-Signal split {split}")
-    #         continue
-    #     print(f"Training Motor Stop-Signal model on split {split}")
-    #     motor_data['trial'] = motor_data.groupby('worker_id').cumcount() + 1
-    #     motor_split = pd.read_csv(split_dir / f'motor_random_splits.csv')
-    #     columns = ['worker_id', 'trial', 'fold'] + [f'random_split_{split}']
-    #     motor_data_fold = motor_data.merge(motor_split[columns], on=['worker_id', 'trial'], how='outer', validate='one_to_one', indicator=True)
-    #     if not motor_data_fold['_merge'].eq('both').all():
-    #         raise ValueError(f'Motor Stop-Signal: trial identities do not match the saved folds')
-    #     motor_data_fold = motor_data_fold.drop(columns='_merge')
-    #     training_data = motor_data_fold[motor_data_fold['random_split_{}'.format(split)].isin(['train', 'validation'])]
-    #     training_dict = dict_generator_cognitive(training_data, task='motor')
-    #     test_data = motor_data_fold[motor_data_fold['random_split_{}'.format(split)] == 'test']
-    #     test_dict = dict_generator_cognitive(test_data, task='motor')
-    #
-    #     # Define the models
-    #     motor_model_logistic = StopSignal('motor_logistic')
-    #     motor_model_hr_exgau = StopSignal('motor_hr_exgau')
-    #     motor_model_rdex = StopSignal('motor_rdex')
-    #
-    #     # Fit the models
-    #     motor_logistic_results = motor_model_logistic.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
-    #     motor_hr_exgau_results = motor_model_hr_exgau.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
-    #     motor_rdex_results = motor_model_rdex.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
-    #
-    #     # Evaluate the models on the test set
-    #     motor_logistic_eval = motor_model_logistic.evaluate(motor_logistic_results.set_index('participant_id')['best_parameters'], test_dict)
-    #     motor_hr_exgau_eval = motor_model_hr_exgau.evaluate(motor_hr_exgau_results.set_index('participant_id')['best_parameters'], test_dict)
-    #     motor_rdex_eval = motor_model_rdex.evaluate(motor_rdex_results.set_index('participant_id')['best_parameters'], test_dict)
-    #
-    #     # Save the results
-    #     run_dir = cog_output / 'motor'
-    #     run_dir.mkdir(parents=True, exist_ok=True)
-    #     motor_logistic_results.to_csv(run_dir / f'motor_logistic_fit_{split}.csv', index=False)
-    #     motor_hr_exgau_results.to_csv(run_dir / f'motor_hr_exgau_fit_{split}.csv', index=False)
-    #     motor_rdex_results.to_csv(run_dir / f'motor_rdex_fit_{split}.csv', index=False)
-    #     motor_logistic_eval.to_csv(run_dir / f'motor_logistic_eval_{split}.csv', index=False)
-    #     motor_hr_exgau_eval.to_csv(run_dir / f'motor_hr_exgau_eval_{split}.csv', index=False)
-    #     motor_rdex_eval.to_csv(run_dir / f'motor_rdex_eval_{split}.csv', index=False)
-
-    # Two-by-two
+    # Stop-Signal
     for split in range(10):
-        # The last evaluation file is saved after all models for this fold.
-        if (cog_output / 'twobytwo' / f'twobytwo_ccr_eval_{split}.csv').is_file():
-            print(f"Skipping completed Two-by-two split {split}")
-            continue
-        print(f"Training Two-by-two model on split {split}")
-        twobytwo_data['trial'] = twobytwo_data.groupby('worker_id').cumcount() + 1
-        twobytwo_split = pd.read_csv(split_dir / f'twobytwo_random_splits.csv')
+        # # The last evaluation file is saved after all models for this fold.
+        # if (cog_output / 'stopsignal' / f'ss_rdex_eval_{split}.csv').is_file():
+        #     print(f"Skipping completed Stop-Signal split {split}")
+        #     continue
+        print(f"Training Stop-Signal model on split {split}")
+        ss_data = stop_signal_data.copy()
+        ss_data['trial'] = ss_data.groupby('worker_id').cumcount() + 1
+        ss_split = pd.read_csv(split_dir / f'stopsignal_random_splits.csv')
         columns = ['worker_id', 'trial', 'fold'] + [f'random_split_{split}']
-        twobytwo_data_fold = twobytwo_data.merge(twobytwo_split[columns], on=['worker_id', 'trial'], how='outer', validate='one_to_one', indicator=True)
-        if not twobytwo_data_fold['_merge'].eq('both').all():
-            raise ValueError(f'Two-by-two: trial identities do not match the saved folds')
-        twobytwo_data_fold = twobytwo_data_fold.drop(columns='_merge')
-        training_data = twobytwo_data_fold[twobytwo_data_fold['random_split_{}'.format(split)].isin(['train', 'validation'])]
-        training_dict = dict_generator_cognitive(training_data, task='twobytwo')
-        test_data = twobytwo_data_fold[twobytwo_data_fold['random_split_{}'.format(split)] == 'test']
-        test_dict = dict_generator_cognitive(test_data, task='twobytwo')
+        ss_data_fold = ss_data.merge(ss_split[columns], on=['worker_id', 'trial'], how='outer', validate='one_to_one', indicator=True)
+        if not ss_data_fold['_merge'].eq('both').all():
+            raise ValueError(f'Stop-Signal: trial identities do not match the saved folds')
+        ss_data_fold = ss_data_fold.drop(columns='_merge')
+        training_data = ss_data_fold[ss_data_fold['random_split_{}'.format(split)].isin(['train', 'validation'])]
+        training_dict = dict_generator_cognitive(training_data, task='stop_signal')
+        test_data = ss_data_fold[ss_data_fold['random_split_{}'.format(split)] == 'test']
+        test_dict = dict_generator_cognitive(test_data, task='stop_signal')
 
         # Define the models
-        twobytwo_model_ddm = TwoByTwo('twobytwo_ddm')
-        # twobytwo_model_lba = TwoByTwo('twobytwo_lba')
-        # twobytwo_model_ccr = TwoByTwo('twobytwo_ccr')
+        # ss_model_logistic = StopSignal('ss_logistic')
+        ss_model_hr_exgau = StopSignal('ss_hr_exgau')
+        # ss_model_rdex = StopSignal('ss_rdex')
 
         # Fit the models
-        twobytwo_ddm_results = twobytwo_model_ddm.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
-        # twobytwo_lba_results = twobytwo_model_lba.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
-        # twobytwo_ccr_results = twobytwo_model_ccr.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+        # ss_logistic_results = ss_model_logistic.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+        ss_hr_exgau_results = ss_model_hr_exgau.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+        # ss_rdex_results = ss_model_rdex.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
 
         # Evaluate the models on the test set
-        twobytwo_ddm_eval = twobytwo_model_ddm.evaluate(twobytwo_ddm_results.set_index('participant_id')['best_parameters'], test_dict)
-        # twobytwo_lba_eval = twobytwo_model_lba.evaluate(twobytwo_lba_results.set_index('participant_id')['best_parameters'], test_dict)
-        # twobytwo_ccr_eval = twobytwo_model_ccr.evaluate(twobytwo_ccr_results.set_index('participant_id')['best_parameters'], test_dict)
+        # ss_logistic_eval = ss_model_logistic.evaluate(ss_logistic_results.set_index('participant_id')['best_parameters'], test_dict)
+        ss_hr_exgau_eval = ss_model_hr_exgau.evaluate(ss_hr_exgau_results.set_index('participant_id')['best_parameters'], test_dict)
+        # ss_rdex_eval = ss_model_rdex.evaluate(ss_rdex_results.set_index('participant_id')['best_parameters'], test_dict)
 
         # Save the results
-        run_dir = cog_output / 'twobytwo'
+        run_dir = cog_output / 'stopsignal'
         run_dir.mkdir(parents=True, exist_ok=True)
-        twobytwo_ddm_results.to_csv(run_dir / f'twobytwo_ddm_fit_{split}.csv', index=False)
-        # twobytwo_lba_results.to_csv(run_dir / f'twobytwo_lba_fit_{split}.csv', index=False)
-        # twobytwo_ccr_results.to_csv(run_dir / f'twobytwo_ccr_fit_{split}.csv', index=False)
-        twobytwo_ddm_eval.to_csv(run_dir / f'twobytwo_ddm_eval_{split}.csv', index=False)
-        # twobytwo_lba_eval.to_csv(run_dir / f'twobytwo_lba_eval_{split}.csv', index=False)
-        # twobytwo_ccr_eval.to_csv(run_dir / f'twobytwo_ccr_eval_{split}.csv', index=False)
+        # ss_logistic_results.to_csv(run_dir / f'ss_logistic_fit_{split}.csv', index=False)
+        ss_hr_exgau_results.to_csv(run_dir / f'ss_hr_exgau_fit_{split}.csv', index=False)
+        # ss_rdex_results.to_csv(run_dir / f'ss_rdex_fit_{split}.csv', index=False)
+        # ss_logistic_eval.to_csv(run_dir / f'ss_logistic_eval_{split}.csv', index=False)
+        ss_hr_exgau_eval.to_csv(run_dir / f'ss_hr_exgau_eval_{split}.csv', index=False)
+        # ss_rdex_eval.to_csv(run_dir / f'ss_rdex_eval_{split}.csv', index=False)
+
+    # Motor Stop-Signal
+    for split in range(10):
+        # # The last evaluation file is saved after all models for this fold.
+        # if (cog_output / 'motor' / f'motor_rdex_eval_{split}.csv').is_file():
+        #     print(f"Skipping completed Motor Stop-Signal split {split}")
+        #     continue
+        print(f"Training Motor Stop-Signal model on split {split}")
+        motor_data['trial'] = motor_data.groupby('worker_id').cumcount() + 1
+        motor_split = pd.read_csv(split_dir / f'motor_random_splits.csv')
+        columns = ['worker_id', 'trial', 'fold'] + [f'random_split_{split}']
+        motor_data_fold = motor_data.merge(motor_split[columns], on=['worker_id', 'trial'], how='outer', validate='one_to_one', indicator=True)
+        if not motor_data_fold['_merge'].eq('both').all():
+            raise ValueError(f'Motor Stop-Signal: trial identities do not match the saved folds')
+        motor_data_fold = motor_data_fold.drop(columns='_merge')
+        training_data = motor_data_fold[motor_data_fold['random_split_{}'.format(split)].isin(['train', 'validation'])]
+        training_dict = dict_generator_cognitive(training_data, task='motor')
+        test_data = motor_data_fold[motor_data_fold['random_split_{}'.format(split)] == 'test']
+        test_dict = dict_generator_cognitive(test_data, task='motor')
+
+        # Define the models
+        # motor_model_logistic = StopSignal('motor_logistic')
+        motor_model_hr_exgau = StopSignal('motor_hr_exgau')
+        # motor_model_rdex = StopSignal('motor_rdex')
+
+        # Fit the models
+        # motor_logistic_results = motor_model_logistic.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+        motor_hr_exgau_results = motor_model_hr_exgau.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+        # motor_rdex_results = motor_model_rdex.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+
+        # Evaluate the models on the test set
+        # motor_logistic_eval = motor_model_logistic.evaluate(motor_logistic_results.set_index('participant_id')['best_parameters'], test_dict)
+        motor_hr_exgau_eval = motor_model_hr_exgau.evaluate(motor_hr_exgau_results.set_index('participant_id')['best_parameters'], test_dict)
+        # motor_rdex_eval = motor_model_rdex.evaluate(motor_rdex_results.set_index('participant_id')['best_parameters'], test_dict)
+
+        # Save the results
+        run_dir = cog_output / 'motor'
+        run_dir.mkdir(parents=True, exist_ok=True)
+        # motor_logistic_results.to_csv(run_dir / f'motor_logistic_fit_{split}.csv', index=False)
+        motor_hr_exgau_results.to_csv(run_dir / f'motor_hr_exgau_fit_{split}.csv', index=False)
+        # motor_rdex_results.to_csv(run_dir / f'motor_rdex_fit_{split}.csv', index=False)
+        # motor_logistic_eval.to_csv(run_dir / f'motor_logistic_eval_{split}.csv', index=False)
+        motor_hr_exgau_eval.to_csv(run_dir / f'motor_hr_exgau_eval_{split}.csv', index=False)
+        # motor_rdex_eval.to_csv(run_dir / f'motor_rdex_eval_{split}.csv', index=False)
+
+    # # Two-by-two
+    # for split in range(10):
+    #     # The last evaluation file is saved after all models for this fold.
+    #     if (cog_output / 'twobytwo' / f'twobytwo_ccr_eval_{split}.csv').is_file():
+    #         print(f"Skipping completed Two-by-two split {split}")
+    #         continue
+    #     print(f"Training Two-by-two model on split {split}")
+    #     twobytwo_data['trial'] = twobytwo_data.groupby('worker_id').cumcount() + 1
+    #     twobytwo_split = pd.read_csv(split_dir / f'twobytwo_random_splits.csv')
+    #     columns = ['worker_id', 'trial', 'fold'] + [f'random_split_{split}']
+    #     twobytwo_data_fold = twobytwo_data.merge(twobytwo_split[columns], on=['worker_id', 'trial'], how='outer', validate='one_to_one', indicator=True)
+    #     if not twobytwo_data_fold['_merge'].eq('both').all():
+    #         raise ValueError(f'Two-by-two: trial identities do not match the saved folds')
+    #     twobytwo_data_fold = twobytwo_data_fold.drop(columns='_merge')
+    #     training_data = twobytwo_data_fold[twobytwo_data_fold['random_split_{}'.format(split)].isin(['train', 'validation'])]
+    #     training_dict = dict_generator_cognitive(training_data, task='twobytwo')
+    #     test_data = twobytwo_data_fold[twobytwo_data_fold['random_split_{}'.format(split)] == 'test']
+    #     test_dict = dict_generator_cognitive(test_data, task='twobytwo')
+    #
+    #     # Define the models
+    #     twobytwo_model_ddm = TwoByTwo('twobytwo_ddm')
+    #     twobytwo_model_lba = TwoByTwo('twobytwo_lba')
+    #     twobytwo_model_ccr = TwoByTwo('twobytwo_ccr')
+    #
+    #     # Fit the models
+    #     twobytwo_ddm_results = twobytwo_model_ddm.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+    #     twobytwo_lba_results = twobytwo_model_lba.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+    #     twobytwo_ccr_results = twobytwo_model_ccr.fit(training_dict, num_iterations=num_iterations, max_workers=max_workers)
+    #
+    #     # Evaluate the models on the test set
+    #     twobytwo_ddm_eval = twobytwo_model_ddm.evaluate(twobytwo_ddm_results.set_index('participant_id')['best_parameters'], test_dict)
+    #     twobytwo_lba_eval = twobytwo_model_lba.evaluate(twobytwo_lba_results.set_index('participant_id')['best_parameters'], test_dict)
+    #     twobytwo_ccr_eval = twobytwo_model_ccr.evaluate(twobytwo_ccr_results.set_index('participant_id')['best_parameters'], test_dict)
+    #
+    #     # Save the results
+    #     run_dir = cog_output / 'twobytwo'
+    #     run_dir.mkdir(parents=True, exist_ok=True)
+    #     twobytwo_ddm_results.to_csv(run_dir / f'twobytwo_ddm_fit_{split}.csv', index=False)
+    #     twobytwo_lba_results.to_csv(run_dir / f'twobytwo_lba_fit_{split}.csv', index=False)
+    #     twobytwo_ccr_results.to_csv(run_dir / f'twobytwo_ccr_fit_{split}.csv', index=False)
+    #     twobytwo_ddm_eval.to_csv(run_dir / f'twobytwo_ddm_eval_{split}.csv', index=False)
+    #     twobytwo_lba_eval.to_csv(run_dir / f'twobytwo_lba_eval_{split}.csv', index=False)
+    #     twobytwo_ccr_eval.to_csv(run_dir / f'twobytwo_ccr_eval_{split}.csv', index=False)
 
     # # ==================================================================================================================
     # # Baseline neural network training
     # # ==================================================================================================================
-    # Only allow the following imports when running the neural network training section.
-    # Otherwise, they may trigger CUDA errors when the cognitive models are being fit in parallel.
+    # # Only allow the following imports when running the neural network training section.
+    # # Otherwise, they may trigger CUDA errors because the cognitive models are being fit in parallel.
     # import torch
     # from HyperNetwork import BaselineNN, BehavioralDataset, behavioral_collate_fn, preprocess_task, fit_model, test_model
     # from torch.utils.data import DataLoader
-
+    #
     # os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # torch.use_deterministic_algorithms(True)
@@ -281,6 +281,7 @@ if __name__ == '__main__':
     #     {'name': 'dd', 'data': dd_data, 'config': 'DD'},
     #     {'name': 'motor', 'data': motor_data, 'config': 'Motor'},
     #     {'name': 'stopsignal', 'data': stop_signal_data, 'config': 'StopSignal'},
+    #     {'name': 'twobytwo', 'data': twobytwo_data, 'config': 'TwoByTwo'}
     # ]
     # for task in tasks:
     #     name = task['name']
