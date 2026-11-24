@@ -3,16 +3,19 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-from cca_zoo.linear import GCCA, CCA
-from cca_zoo.model_selection import permutation_test_significance
+from cca_zoo.linear import GCCA, CCA, MCCA
+from cca_zoo.model_selection import permutation_test_significance, cross_validate, cross_val_score, GridSearchCV
+from cca_zoo.metrics import average_pairwise_correlations, pairwise_correlations
 from CKA.CKA import CKA
 from joblib import Parallel, delayed, parallel_config
 from statsmodels.stats.multitest import multipletests
 from threadpoolctl import threadpool_limits
 from HyperNetwork import evaluate_cka_permutation
-from task_config import selected_config
+from task_config import selected_config, TASK_DIMENSIONS
+from hypernn_embedding_interpretation_consensus import selected_models, model_parameters
 from utils.permcca import permcca
-from permcca.inference import permutation_inference, can_corr
+from scipy.stats import permutation_test
+from sklearn.model_selection import train_test_split
 
 
 # Settings: only the exported main model is evaluated here.
@@ -27,6 +30,7 @@ n_jobs = 32
 permutation_seed = 42
 permutation_alpha = 0.05
 task_names = ['cct', 'dd', 'motor', 'stopsignal', 'twobytwo']
+task_dimensions = {task.lower(): n for task, n in TASK_DIMENSIONS.items()}
 
 # Saved predictive results (independent of the embedding/permutation analysis below).
 BASE = Path(__file__).resolve().parent
@@ -48,16 +52,22 @@ if __name__ == '__main__':
         paths_group = sorted((cognitive_group_root / task).glob('*_eval_*.csv'))
         for family, paths in [('cognitive_individual', paths_ind), ('cognitive_group', paths_group)]:
             for path in paths:
+
                 model, split = path.stem.rsplit('_eval_', 1)
                 family = family
                 table = pd.read_csv(path)
+                # replace eval to fit to get the fit file
+                fit_path = path.parent / path.name.replace('_eval_', '_fit_')
+                fit_table = pd.read_csv(fit_path)
+                aic = fit_table['AIC'].sum()
+                bic = fit_table['BIC'].sum()
                 values = table[['total_nll', 'n_trials', 'n_correct']]
                 if (not np.isfinite(values).all().all() or (table.n_trials <= 0).any()
                         or (table.total_nll < 0).any() or (table.n_correct < 0).any()
                     or (table.n_correct > table.n_trials).any()):
                     raise ValueError(f'Invalid saved metrics: {path}')
                 cognitive_records.append(dict(task=task, model=model, random_split=int(split), model_family=family,
-                    n_participants=len(table), n_test_trials=int(table.n_trials.sum()),
+                    n_participants=len(table), n_test_trials=int(table.n_trials.sum()), aic=aic, bic=bic,
                     test_total_nll=table.total_nll.sum(), n_test_correct=int(table.n_correct.sum())))
     cognitive_by_split = pd.DataFrame(cognitive_records)
     for key, group in cognitive_by_split.groupby(['task', 'model', 'model_family']):
@@ -67,15 +77,18 @@ if __name__ == '__main__':
     # Pool trials within a fold, then give each fold equal weight.
     cognitive_by_split['test_nll'] = cognitive_by_split.test_total_nll / cognitive_by_split.n_test_trials
     cognitive_by_split['test_accuracy'] = cognitive_by_split.n_test_correct / cognitive_by_split.n_test_trials
+    cognitive_by_split['avg_aic'] = cognitive_by_split.aic / cognitive_by_split.n_participants
+    cognitive_by_split['avg_bic'] = cognitive_by_split.bic / cognitive_by_split.n_participants
     cognitive_by_model = cognitive_by_split.groupby(['task', 'model', 'model_family'], as_index=False).agg(
-        test_nll=('test_nll', 'mean'), test_accuracy=('test_accuracy', 'mean'),
-        test_nll_sd=('test_nll', 'std'), n_splits=('random_split', 'nunique'),
-        n_test_trials=('n_test_trials', 'sum'))
+        test_nll=('test_nll', 'mean'), test_accuracy=('test_accuracy', 'mean'), test_nll_sd=('test_nll', 'std'),
+        avg_aic=('avg_aic', 'mean'), avg_bic=('avg_bic', 'mean'), total_aic=('aic', 'mean'), total_bic=('bic', 'mean'),
+        n_splits=('random_split', 'nunique'), n_test_trials=('n_test_trials', 'sum'))
     comparison_output.mkdir(parents=True, exist_ok=True)
     cognitive_by_split.to_csv(comparison_output / 'cognitive_test_by_split.csv', index=False)
     cognitive_by_model.to_csv(comparison_output / 'cognitive_test_by_model.csv', index=False)
     comparison = [cognitive_by_model]
     fold_comparison = [cognitive_by_split]
+    print(cognitive_by_model.sort_values(['task', 'avg_aic']).to_string(index=False))
 
     # Evaluate the saved BasicNN and HyperNN results, and compare with the cognitive models.
     for family, path in [('BasicNN', basic_nn_results), ('HyperNN', hyper_nn_results)]:
@@ -98,6 +111,13 @@ if __name__ == '__main__':
     model_fold_results = pd.concat(fold_comparison, ignore_index=True)
     model_fold_results = model_fold_results[['model_family', 'model', 'task', 'random_split',
                                              'test_nll', 'test_accuracy', 'n_test_trials']]
+    model_fold_results['fit_level'] = np.where(
+        model_fold_results['model_family'].isin(
+            ['cognitive_group', 'BasicNN']
+        ),
+        'group_fit',
+        'individual_fit',
+    )
     model_fold_results.to_csv(comparison_output / 'test_performance_by_fold.csv', index=False)
     print(f'Saved {len(model_fold_results)} model/task/fold rows')
     model_comparison = model_comparison.sort_values(['task', 'test_nll']).reset_index(drop=True)
@@ -113,6 +133,8 @@ if __name__ == '__main__':
 
     # Embedding Stability
     stability_tests = []
+    pair_permutation_results = []
+    heldout_results = []
     for task in task_names:
         raw = [np.load(hypernn_root / selected_config / f'random_split_{split}' / f'{task}_embeddings.npy').astype(float)
                for split in range(n_splits)]
@@ -121,9 +143,58 @@ if __name__ == '__main__':
         scores = gcca.transform(views)
         result = permutation_test_significance(GCCA(n_components=dimensions), views, n_permutations=n_permutation,
                                                random_state=permutation_seed, n_jobs=n_jobs)
-        observed_cca = result.correlations[0]
-        cca_p = result.p_values[0]
+        observed_cca = result.correlations
+        cca_p = result.p_values
         observed_cka = np.array([CKA().linear_CKA(raw[a], raw[b]) for a, b in split_pairs])
+
+        # Fit pairwise CCA for each pair of splits, and run permutation tests for each pair.
+        for a, b in split_pairs:
+            permcca_p = permcca(views[a], views[b], n_perm=n_permutation, seed=permutation_seed)
+            pair_permutation_results.append(dict(name=task, split_a=a, split_b=b, permcca_p1=permcca_p[0],
+                                                 permcca_p2=permcca_p[1], permcca_p3=permcca_p[2], permcca_p4=permcca_p[3]))
+
+        for k in range(1, dimensions + 1):
+            p_values = np.array([record[f'permcca_p{k}'] for record in pair_permutation_results if record['name'] == task])
+            significant = p_values < 0.05
+
+            print(f'[{task}]: Component {k}: mean p = {p_values.mean():.4f}, '
+                  f'[{task}]: n significant = {significant.sum()} / {len(p_values)}, '
+                  f'[{task}]: proportion = {significant.mean():.4f}')
+
+        # Held-out evaluation of the GCCA embeddings for each task
+        # Split the data into training and testing sets for each task
+        train_idx, test_idx = train_test_split(np.arange(raw[0].shape[0]), test_size=0.30, random_state=permutation_seed)
+        train_raw = [X[train_idx] for X in raw]
+        test_raw = [X[test_idx] for X in raw]
+
+        # Rescale the training and testing data for each view
+        train_views = []
+        test_views = []
+
+        for train_X, test_X in zip(train_raw, test_raw):
+            scaler = StandardScaler().fit(train_X)
+            train_views.append(scaler.transform(train_X))
+            test_views.append(scaler.transform(test_X))
+
+        gcca_train = GCCA(n_components=dimensions).fit(train_views)
+        test_scores = gcca_train.transform(test_views)
+        mean_correlation = lambda *scores: average_pairwise_correlations(pairwise_correlations([s[:, None] for s in scores]))[0]
+
+        # Test the held-out mean correlation for each component using permutation testing
+        for component in range(dimensions):
+            test = permutation_test(data=tuple(scores[:, component] for scores in test_scores), statistic=mean_correlation,
+                                    permutation_type="pairings", alternative="greater", n_resamples=n_permutation, rng=permutation_seed + component)
+            heldout_results.append({
+                "task": task,
+                "component": component + 1,
+                "heldout_mean_correlation": test.statistic,
+                "p_permutation": test.pvalue,
+            })
+
+        for heldout_record in heldout_results[-dimensions:]:
+            print(f"[{task}]: Component {heldout_record['component']}: "
+                  f"held-out mean r = {heldout_record['heldout_mean_correlation']:.4f}, "
+                  f"p = {heldout_record['p_permutation']:.4g}")
 
         # Permutation for CKA
         cka_permutation_results = []
@@ -138,75 +209,96 @@ if __name__ == '__main__':
         cka_permutation_pairwise_null = np.stack(cka_permutation_pairwise).mean(axis=0)
         cka_permutation_p = (1 + (np.array(cka_permutation_results) >= observed_cka.mean()).sum()) / (n_permutation + 1)
         cka_permutation_pairwise_p = (1 + (np.stack(cka_permutation_pairwise) >= observed_cka[None, :]).sum(axis=0)) / (n_permutation + 1)
-        stability_tests.append(dict(name=task, params=gcca.get_params(), views=views, cka_views=raw,
+        stability_tests.append(dict(name=task,
                                     observed_cca=observed_cca, cca_p=cca_p, cca_null=result.null_correlations[:, 0],
                                     observed_cka=observed_cka.mean(), cka_p=cka_permutation_p, cka_null=cka_permutation_mean_null,
                                     pair_cka=observed_cka, pair_cka_p=cka_permutation_pairwise_p, pair_cka_null=cka_permutation_pairwise_null))
 
     # Save stability results for each task
+    pair_permutation_results_df = pd.DataFrame(pair_permutation_results)
+    pair_permutation_results_summary = pair_permutation_results_df.groupby('name', as_index=False).agg(
+        mean_permcca_p1=('permcca_p1', 'mean'), mean_permcca_p2=('permcca_p2', 'mean'),
+        mean_permcca_p3=('permcca_p3', 'mean'), mean_permcca_p4=('permcca_p4', 'mean'),
+        n_sig_permcca_p1=('permcca_p1', lambda x: (x < 0.05).sum()),
+        n_sig_permcca_p2=('permcca_p2', lambda x: (x < 0.05).sum()),
+        n_sig_permcca_p3=('permcca_p3', lambda x: (x < 0.05).sum()),
+        n_sig_permcca_p4=('permcca_p4', lambda x: (x < 0.05).sum())
+    )
+    heldout_results_df = pd.DataFrame(heldout_results)
+
     stability_output = output / 'Stability'
     stability_output.mkdir(parents=True, exist_ok=True)
     stability_tests_df = pd.DataFrame(stability_tests)
     stability_tests_df.to_csv(stability_output / 'stability_tests.csv', index=False)
+    pair_permutation_results_df.to_csv(stability_output / 'pairwise_permutation_results.csv', index=False)
+    pair_permutation_results_summary.to_csv(stability_output / 'pairwise_permutation_summary.csv', index=False)
+    heldout_results_df.to_csv(stability_output / 'heldout_results.csv', index=False)
 
     # ==================================================================================================================
-    # Cross-task GCCA: Full-data embeddings
+    # Cross-task GCCA (5-task)
     # ==================================================================================================================
+    # Cross-task (5-task) GCCA on the consensus embeddings from 10-fold CV (should be similar to the full-data GCCA above).
+    cv_embedding_path = output.parent.parent / 'HyperNN_Grid_Search_Evaluation' / 'Cross_Task_Convergence' / 'Consensus_Embeddings'
+    cv_embeddings = [pd.read_csv(cv_embedding_path / f'{selected_config}_{task}.csv') for task in task_names]
+    cv_embedding_arrays = [consensus[[f'gcca_{k}' for k in range(1, task_dimensions[task] + 1)]].to_numpy()
+                           for task, consensus in zip(task_names, cv_embeddings)]
+
+    # Retain each task's selected axes and use their minimum count for shared components.
+    views_cv = [StandardScaler().fit_transform(embedding) for embedding in cv_embedding_arrays]
+    gcca_cv = GCCA(n_components=1).fit(views_cv)
+    scores_cv = gcca_cv.transform(views_cv)
+    result_cv = permutation_test_significance(GCCA(n_components=1), views_cv, n_permutations=n_permutation,
+                                              random_state=permutation_seed, n_jobs=n_jobs)
+    observed_cca_cv = result_cv.correlations
+    cca_p_cv = result_cv.p_values
+
+    # Cross-task (5-task) GCCA on the full-data embeddings
     full_embedding_path = output.parent.parent / 'Final_Models' / selected_config
     full_embeddings = [np.load(full_embedding_path / f'{task}_embeddings.npy').astype(float) for task in task_names]
 
-    # Cross-task GCCA on the full-data embeddings
     views = [StandardScaler().fit_transform(v) for v in full_embeddings]
-    gcca = GCCA(n_components=4).fit(views)
+    gcca = GCCA(n_components=1).fit(views)
     scores = gcca.transform(views)
-    result = permutation_test_significance(GCCA(n_components=4), views, n_permutations=n_permutation,
+    average = average_pairwise_correlations(pairwise_correlations(scores))
+    result = permutation_test_significance(GCCA(n_components=1), views, n_permutations=n_permutation,
                                            random_state=permutation_seed, n_jobs=n_jobs)
     observed_cca = result.correlations
     cca_p = result.p_values
     null = result.null_correlations[:, 0]
     pd.DataFrame({'null_cca': null}).to_csv(output / 'cross_task_gcca_null.csv', index=False)
 
-    # Robustness check: GCCA on the consensus embeddings from 10-fold CV (should be similar to the full-data GCCA above).
-    cv_embedding_path = output.parent.parent / 'HyperNN_Grid_Search_Evaluation' / 'Cross_Task_Convergence' / 'Consensus_Embeddings'
-    cv_embeddings = [pd.read_csv(cv_embedding_path / f'{selected_config}_{task}.csv') for task in task_names]
-    embedding_cols = [c for c in cv_embeddings[0].columns if c.startswith('gcca_')]
-
-    # Cross-task GCCA on the consensus embeddings
-    views_cv = [StandardScaler().fit_transform(v) for v in [consensus[embedding_cols].to_numpy() for consensus in cv_embeddings]]
-    gcca_cv = GCCA(n_components=4).fit(views_cv)
-    scores_cv = gcca_cv.transform(views_cv)
-    result_cv = permutation_test_significance(GCCA(n_components=4), views_cv, n_permutations=n_permutation,
-                                              random_state=permutation_seed, n_jobs=n_jobs)
-    observed_cca_cv = result_cv.correlations
-    cca_p_cv = result_cv.p_values
-
-
-    cross_task_gcca = [dict(comp=i, params=gcca.get_params(), observed_cca=observed_cca[i], cca_p=cca_p[i],
-                            observed_cca_cv=observed_cca_cv[i], cca_p_cv=cca_p_cv[i]) for i in range(len(observed_cca))]
-    cross_task_gcca_df = pd.DataFrame(cross_task_gcca)
+    # Series align the shorter consensus results with the four full-data components.
+    cross_task_gcca_df = pd.DataFrame({
+        'comp': np.arange(len(observed_cca)),
+        'params': [gcca.get_params()] * len(observed_cca),
+        'observed_cca': observed_cca, 'cca_p': cca_p,
+        'observed_cca_cv': pd.Series(observed_cca_cv),
+        'cca_p_cv': pd.Series(cca_p_cv),
+    }, index=np.arange(len(observed_cca)))
     cross_task_gcca_df.to_csv(output / 'cross_task_gcca_results.csv', index=False)
 
     # Create cross-task consensus results
-    cross_task_consensus = np.mean([StandardScaler().fit_transform(s) for s in scores], axis=0)
+    cross_task_consensus = np.mean([StandardScaler().fit_transform(s) for s in scores_cv], axis=0)
 
     # Save both the aligned embeddings and the consensus embeddings for further analysis
     np.save(full_embedding_path / 'cross_task_consensus_embeddings.npy', cross_task_consensus)
-    for task, score in zip(task_names, scores):
+    for task, score in zip(task_names, scores_cv):
         np.save(full_embedding_path / f'{task}_cross_task_gcca_embeddings.npy', score)
     print(f'Cross-task GCCA results saved to {output / "cross_task_gcca_results.csv"}')
 
     # ==================================================================================================================
-    # Pairwise CCA across tasks using the consensus embeddings
+    # Pairwise CCA across tasks using cv consensus embeddings and full-data embeddings
     # ==================================================================================================================
     pairwise_cca_results = []
     for a, b in combinations(range(len(task_names)), 2):
         views = [StandardScaler().fit_transform(full_embeddings[a]), StandardScaler().fit_transform(full_embeddings[b])]
-        views_cv = [StandardScaler().fit_transform(cv_embeddings[a][embedding_cols].to_numpy()), StandardScaler().fit_transform(cv_embeddings[b][embedding_cols].to_numpy())]
-        cca = CCA(n_components=4).fit(views)
-        cca_cv = CCA(n_components=4).fit(views_cv)
+        views_cv = [StandardScaler().fit_transform(cv_embedding_arrays[a]),
+                    StandardScaler().fit_transform(cv_embedding_arrays[b])]
+        cca = CCA(n_components=1).fit(views)
+        cca_cv = CCA(n_components=1).fit(views_cv)
         scores = cca.transform(views)
-        result = permutation_test_significance(CCA(n_components=4), views, n_permutations=n_permutation, random_state=permutation_seed, n_jobs=n_jobs)
-        result_cv = permutation_test_significance(CCA(n_components=4), views_cv, n_permutations=n_permutation, random_state=permutation_seed, n_jobs=n_jobs)
+        result = permutation_test_significance(CCA(n_components=1), views, n_permutations=n_permutation, random_state=permutation_seed, n_jobs=n_jobs)
+        result_cv = permutation_test_significance(CCA(n_components=1), views_cv, n_permutations=n_permutation, random_state=permutation_seed, n_jobs=n_jobs)
         observed_cca = result.correlations
         observed_cca_cv = result_cv.correlations
         cca_p = result.p_values
@@ -214,19 +306,69 @@ if __name__ == '__main__':
         perm_p = permcca(views[0], views[1], n_perm=n_permutation, seed=permutation_seed)
         perm_p_cv = permcca(views_cv[0], views_cv[1], n_perm=n_permutation, seed=permutation_seed)
         pairwise_cca_results.append(dict(name=f'{task_names[a]}__{task_names[b]}', task_a=task_names[a], task_b=task_names[b],
-                                         observed_cca=observed_cca[0], cca_p=cca_p[0], cca_p_perm=perm_p,
-                                         observed_cca_cv=observed_cca_cv[0], cca_p_cv=cca_p_cv[0], cca_p_cv_perm=perm_p_cv,
+                                         observed_cca_cv=observed_cca_cv[0], cca_p_cv=cca_p_cv[0], cca_p_cv_perm=perm_p_cv[0],
+                                         observed_cca=observed_cca[0], cca_p=cca_p[0], cca_p_perm=perm_p[0],
                                          views_a=views[0], views_b=views[1], views_cv_a=views_cv[0], views_cv_b=views_cv[1]))
 
         # Create pairwise cross-task consensus results
-        pairwise_consensus = np.mean([StandardScaler().fit_transform(s) for s in scores], axis=0)
+        pairwise_consensus = np.mean([StandardScaler().fit_transform(s) for s in scores_cv], axis=0)
 
         # Save both the aligned embeddings and the consensus embeddings for further analysis
         np.save(full_embedding_path / f'{task_names[a]}__{task_names[b]}_pairwise_consensus_embeddings.npy', pairwise_consensus)
-        for task, score in zip([task_names[a], task_names[b]], scores):
+        for task, score in zip([task_names[a], task_names[b]], scores_cv):
             np.save(full_embedding_path / f'{task}_{task_names[a]}__{task_names[b]}_pairwise_cca_embeddings.npy', score)
 
     pairwise_cca_results_df = pd.DataFrame(pairwise_cca_results)
     pairwise_cca_results_df['cca_p_adj'] = multipletests(pairwise_cca_results_df['cca_p'], alpha=permutation_alpha, method='fdr_bh')[1]
     pairwise_cca_results_df['cca_p_cv_adj'] = multipletests(pairwise_cca_results_df['cca_p_cv'], alpha=permutation_alpha, method='fdr_bh')[1]
     pairwise_cca_results_df.to_csv(output / 'pairwise_cca_results.csv', index=False)
+
+    # ==================================================================================================================
+    # Pairwise CCA across tasks using CV-averaged cognitive parameters
+    # ==================================================================================================================
+    cognitive_cca_output = output / 'Cognitive_Models'
+    cognitive_cca_output.mkdir(parents=True, exist_ok=True)
+    cognitive_parameters = {}
+    for task in task_names:
+        model = selected_models[task]
+        names = model_parameters[model]
+        fits = pd.concat(pd.read_csv(cognitive_root / task / f'{model}_fit_{split}.csv',
+                                     usecols=['participant_id', 'best_parameters']) for split in range(n_splits))
+        fits[names] = np.stack([np.fromstring(value.strip('[]'), sep=' ') for value in fits.best_parameters])
+        parameters = fits.groupby('participant_id')[names].mean().rename_axis('worker_id')
+        parameters.to_csv(cognitive_cca_output / f'{task}_{model}_cv_parameters.csv')
+        cognitive_parameters[task] = parameters
+
+    cognitive_pairwise_cca_results = []
+    for task_a, task_b in combinations(task_names, 2):
+        # Join on worker_id before standardizing so both views have identical participant order.
+        matched = cognitive_parameters[task_a].join(cognitive_parameters[task_b], how='inner',
+                                                    lsuffix='_a', rsuffix='_b').dropna()
+        n_parameters_a = cognitive_parameters[task_a].shape[1]
+        cognitive_views = [StandardScaler().fit_transform(matched.iloc[:, :n_parameters_a]),
+                           StandardScaler().fit_transform(matched.iloc[:, n_parameters_a:])]
+        print(f'Cognitive CCA: {task_a} / {task_b}, n={len(matched)}', flush=True)
+        with threadpool_limits(limits=1), parallel_config(backend='loky', inner_max_num_threads=1):
+            cognitive_result = permutation_test_significance(
+                CCA(n_components=1), cognitive_views, n_permutations=n_permutation,
+                random_state=permutation_seed, n_jobs=n_jobs)
+            cognitive_perm_p = permcca(*cognitive_views, n_perm=n_permutation, seed=permutation_seed)
+        cognitive_pairwise_cca_results.append(dict(
+            name=f'{task_a}__{task_b}', task_a=task_a, task_b=task_b,
+            model_a=selected_models[task_a], model_b=selected_models[task_b],
+            n_participants=len(matched), n_parameters_a=n_parameters_a,
+            n_parameters_b=cognitive_parameters[task_b].shape[1], n_splits=n_splits,
+            observed_cca=cognitive_result.correlations[0], cca_p=cognitive_result.p_values[0],
+            cca_p_perm=cognitive_perm_p[0], n_permutation=n_permutation,
+            permutation_seed=permutation_seed))
+        print(f'  r={cognitive_result.correlations[0]:.4f}, p={cognitive_result.p_values[0]:.4g}, '
+              f'PermCCA p={cognitive_perm_p[0]:.4g}', flush=True)
+
+    cognitive_pairwise_cca_results_df = pd.DataFrame(cognitive_pairwise_cca_results)
+    cognitive_pairwise_cca_results_df['cca_p_adj'] = multipletests(
+        cognitive_pairwise_cca_results_df.cca_p, alpha=permutation_alpha, method='fdr_bh')[1]
+    cognitive_pairwise_cca_results_df['cca_p_perm_adj'] = multipletests(
+        cognitive_pairwise_cca_results_df.cca_p_perm, alpha=permutation_alpha, method='fdr_bh')[1]
+    cognitive_pairwise_cca_results_df.to_csv(cognitive_cca_output / 'pairwise_cca_results.csv', index=False)
+    print(cognitive_pairwise_cca_results_df.to_string(index=False))
+    print(f'Cognitive pairwise CCA results saved to {cognitive_cca_output}', flush=True)

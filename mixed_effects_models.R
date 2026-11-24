@@ -8,9 +8,16 @@ library(readr)
 # ==============================================================================
 # Read the data
 # ==============================================================================
-test_perf <- read.csv("D:/PycharmProjects/Hypernetwork/Results/Cognitive_Model_Evaluation/cct_dd_model_by_fold.csv")
-test_perf$model_family <- factor(test_perf$model_family, levels = c('HyperNN', 'BasicNN', 'Cognitive'))
-test_perf$fold <- factor(test_perf$fold, levels = c('0', '1', '2', '3', '4', '5', '6', '7', '8', '9'))
+test_perf <- read.csv("D:/PycharmProjects/Hypernetwork/Results/Cognitive_Model_Evaluation/test_performance_by_fold.csv")
+test_perf$model_family <- factor(test_perf$model_family, levels = c('HyperNN', 'BasicNN', 'cognitive_individual', 'cognitive_group'))
+test_perf$fit_level <- factor(test_perf$fit_level, levels = c('individual_fit', 'group_fit'))
+test_perf$random_split <- factor(test_perf$random_split, levels = c('0', '1', '2', '3', '4', '5', '6', '7', '8', '9'))
+test_perf$structure <- ifelse(
+  test_perf$model_family %in% c("HyperNN", "BasicNN"),
+  "NN",
+  "Cognitive"
+)
+
 
 dd <- test_perf %>%
   filter(task == 'dd')
@@ -48,18 +55,18 @@ motor$model <- factor(motor$model, levels = c('layers_1_dims_8_rank_full_emb_4_n
 best_cog <- test_perf %>%
   filter(model%in%(c('cct_pt_loss_shape', 'dd_hyperboloid', 'motor_rdex', 'ss_rdex', 
                      'layers_1_dims_8_rank_full_emb_4_nonlinear_nodes_16_reg_0.0',
-                     'layers_1_dims_64')))
+                     'layers_1_dims_8')))
 
-testnll <- lmer(test_nll ~ model_family + task + (1 | fold), data=test_perf)
+testnll <- lmer(test_nll ~ model_family + task + (1 | random_split), data=test_perf)
 summary(testnll)
 plot(allEffects(testnll))
 
-testnll_best <- lmer(test_nll ~ model_family + task + (1 | fold), data=best_cog)
+testnll_best <- lmer(test_nll ~ model_family + task + (1 | random_split), data=best_cog)
 summary(testnll_best)
 plot(allEffects(testnll_best))
 
-testnll <- lmer(test_nll ~ model + (1 | fold), data=motor)
-summary(testnll)
-plot(allEffects(testnll))
+fit_level_effect <- lmer(test_nll ~ fit_level * structure + task + (1 | random_split), data=test_perf)
+summary(fit_level_effect)
+plot(allEffects(fit_level_effect))
 
 

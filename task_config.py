@@ -68,3 +68,12 @@ TASK_CONFIGS = {
     },
 
 }
+
+# Define GCCA-dimensions to keep for each task
+TASK_DIMENSIONS = {
+    'CCT': 4,
+    'DD': 3,
+    'Motor': 4,
+    'TwoByTwo': 2,
+    'StopSignal': 4,
+}
